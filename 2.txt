@@ -1,0 +1,144 @@
+import pandas as pd
+import warnings
+
+# --------------------------
+# 1. Create Admission Table
+# --------------------------
+admission_table = {
+    'Patient 1': {
+        'PatientID': 'A1234-B456',
+        'Admission ID': [12, 34, 15],
+        'AdmissionStartDate': ['2019-01-03 9:34:55', '2019-02-03 10:50:55', '2019-04-03 12:34:55'],
+        'AdmissionEndDate': ['2019-01-07 8:45:43', '2019-03-04 1:50:32', '2019-04-03 5:38:18']
+    },
+    'Patient 2': {
+        'PatientID': 'B1234-C456',
+        'Admission ID': [13, 34],
+        'AdmissionStartDate': ['2018-01-03 9:34:55', '2018-02-03 10:50:55'],
+        'AdmissionEndDate': ['2018-01-07 8:45:43', '2018-03-04 1:50:32']
+    }
+}
+
+admission_table = (
+    pd.concat({k: pd.DataFrame(v) for k, v in admission_table.items()})
+    .reset_index(level=1, drop=True)
+    .reset_index(drop=True)
+)
+
+# --------------------------
+# 2. Create Diagnosis Data
+# --------------------------
+Patient_1 = {
+    'PatientID': 'A1234-B456',
+    'Admission ID': [12, 34, 15],
+    'PrimaryDiagnosisCode': [
+        ['E11.64', 'I25.812', 'I25.10'],
+        ['E11.64', 'I25.812', 'I25.10', '780.96', '784.0'],
+        ['E11.64', 'I25.812', 'I25.10', '786.50', '401.9', '789.00']
+    ],
+    'CodingSystem': ['ICD-9', 'ICD-9', 'ICD-9'],
+    'DiagnosisCodeDescription': [
+        [
+            'Type 2 diabetes mellitus with hypoglycemia',
+            'Atherosclerosis of bypass graft of coronary artery of transplanted heart without angina pectoris',
+            'Atherosclerotic heart disease of native coronary artery without angina pectoris'
+        ],
+        [
+            'Type 2 diabetes mellitus with hypoglycemia',
+            'Atherosclerosis of bypass graft of coronary artery of transplanted heart without angina pectoris',
+            'Atherosclerotic heart disease of native coronary artery without angina pectoris',
+            'Generalized Pain',
+            'Dizziness and giddiness'
+        ],
+        [
+            'Type 2 diabetes mellitus with hypoglycemia',
+            'Atherosclerosis of bypass graft of coronary artery of transplanted heart without angina pectoris',
+            'Atherosclerotic heart disease of native coronary artery without angina pectoris',
+            'Chest pain, unspecified',
+            'Essential hypertension, unspecified',
+            'Abdominal pain, unspecified site'
+        ]
+    ]
+}
+
+Patient_2 = {
+    'PatientID': 'B1234-C456',
+    'Admission ID': [13, 34],
+    'PrimaryDiagnosisCode': [
+        ['M05.59', 'Z13.85', 'O99.35'],
+        ['M05.59', 'Z13.85', 'O99.35', 'D37.0']
+    ],
+    'CodingSystem': ['ICD-9', 'ICD-9'],
+    'DiagnosisCodeDescription': [
+        [
+            'Rheumatoid polyneuropathy with rheumatoid arthritis of multiple sites',
+            'Encounter for screening for nervous system disorders',
+            'Diseases of the nervous system complicating pregnancy, childbirth, and the puerperium'
+        ],
+        [
+            'Rheumatoid polyneuropathy with rheumatoid arthritis of multiple sites',
+            'Encounter for screening for nervous system disorders',
+            'Diseases of the nervous system complicating pregnancy, childbirth, and the puerperium',
+            'Neoplasm of uncertain behavior of lip, oral cavity and pharynx'
+        ]
+    ]
+}
+
+# --------------------------
+# 3. Functions
+# --------------------------
+def process_ehr(Patient1, Patient2):
+    """Expand diagnosis lists into individual rows"""
+    pt_diagnosis_table = [Patient1, Patient2]
+    pt_diagnosis_table = pd.concat(
+        [pd.DataFrame({k: v for k, v in d.items()}) for d in pt_diagnosis_table]
+    )
+
+    pt_diagnosis_table = (
+        pt_diagnosis_table
+        .set_index(['PatientID', 'Admission ID', 'CodingSystem'])
+        .apply(lambda x: x.apply(pd.Series).stack())
+        .reset_index()
+        .drop('level_3', axis=1)  # ✅ fixed axis argument
+    )
+    return pt_diagnosis_table
+
+def hash_key(df):
+    """Add a unique key per patient admission"""
+    df['HashKey'] = df['PatientID'].apply(lambda x: x.split('-')[0]) + '-' + df['Admission ID'].astype(str)
+    cols = [df.columns[-1]] + [col for col in df if col != df.columns[-1]]
+    return df[cols]
+
+# --------------------------
+# 4. Process Data
+# --------------------------
+diagnosis_table = process_ehr(Patient_1, Patient_2)
+diagnosis_table = hash_key(diagnosis_table)
+admission_table = hash_key(admission_table)
+
+# Convert date columns to datetime (auto-infer format)
+admission_table[['AdmissionStartDate', 'AdmissionEndDate']] = admission_table[
+    ['AdmissionStartDate', 'AdmissionEndDate']
+].apply(pd.to_datetime)
+
+# --------------------------
+# 5. Merge Data
+# --------------------------
+ehr_full = diagnosis_table.merge(
+    admission_table,
+    on='HashKey',
+    how='left',
+    suffixes=('_diag', '_adm')
+)
+
+# --------------------------
+# 6. Display Results
+# --------------------------
+print("\n--- Diagnosis Table ---")
+print(diagnosis_table.head())
+
+print("\n--- Admission Table ---")
+print(admission_table.head())
+
+print("\n--- Full EHR Table ---")
+print(ehr_full.head())

@@ -1,0 +1,64 @@
+dataset:  https://huggingface.co/datasets/harishnair04/mtsamples/blob/main/mtsamples.csv
+
+
+# Lightweight clinical entity extraction (no scispacy required)
+import pandas as pd
+import spacy
+from spacy.matcher import PhraseMatcher
+from spacy import displacy
+from google.colab import files
+from IPython.display import display, HTML
+
+# 1) Upload the mtsamples.csv (or ensure it's in the working dir)
+print("Upload mtsamples.csv (or ensure it's present).")
+uploaded = files.upload()
+
+# 2) Load data
+mts = pd.read_csv("mtsamples.csv")
+mts.dropna(subset=['transcription'], inplace=True)
+print("Loaded rows:", mts.shape[0])
+print(mts[['medical_specialty','sample_name']].head())
+
+# 3) Load spaCy small English model (usually available)
+try:
+    nlp = spacy.load("en_core_web_sm")
+except Exception:
+    # if not present, install the small model
+    !python -m spacy download en_core_web_sm
+    nlp = spacy.load("en_core_web_sm")
+
+# 4) Prepare a small medical vocabulary (extend as you like)
+# Example medical terms (diseases, procedures, drug names). Expand this list for better coverage.
+medical_terms = [
+    "morbid obesity", "obesity", "diabetes", "hypertension", "chest pain",
+    "myocardial infarction", "pneumonia", "aspirin", "marcaine", "laparoscopic roux-en-y",
+    "endotracheal intubation", "anesthesia", "fever", "cough", "abdominal pain"
+]
+
+# Build PhraseMatcher for case-insensitive matching
+matcher = PhraseMatcher(nlp.vocab, attr="LOWER")
+patterns = [nlp.make_doc(term) for term in medical_terms]
+matcher.add("MED_TERM", patterns)
+
+# 5) Pick a note and run
+idx = 10 if 10 < len(mts) else 0
+text = mts.iloc[idx]["transcription"]
+doc = nlp(text)
+
+# 6) Extract spaCy named entities (PERSON, ORG, GPE, etc.)
+print("spaCy NER (en_core_web_sm) examples:")
+for ent in doc.ents[:30]:
+    print(f"{ent.text} — {ent.label_}")
+
+# 7) Use the rule-based medical matcher
+matches = matcher(doc)
+found = []
+for match_id, start, end in matches:
+    span = doc[start:end]
+    found.append((span.text, start, end))
+print("\nRule-based medical matches:")
+for t, s, e in found:
+    print(t)
+
+# 8) Visualize (optional)
+display(HTML(displacy.render(doc, style="ent", jupyter=True)))

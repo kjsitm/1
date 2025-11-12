@@ -1,0 +1,129 @@
+dataset link: https://github.com/ishaghodgaonkar/emrbots
+
+# ==============================================
+# 🏥 EHR Data Analysis and Visualization with SOM
+# ==============================================
+
+# 1. Setup
+!pip install minisom pytesseract Pillow opencv-python-headless
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from datetime import datetime, date
+from minisom import MiniSom
+import pytesseract
+from PIL import Image
+import cv2
+import warnings
+warnings.filterwarnings('ignore')
+
+# 2. Upload EHR text files
+from google.colab import files
+print("Upload: AdmissionsCorePopulatedTable.txt, AdmissionsDiagnosesCorePopulatedTable.txt, LabsCorePopulatedTable.txt, PatientCorePopulatedTable.txt")
+uploaded = files.upload()
+
+# 3. Read DataFrames
+admissions_df = pd.read_csv("AdmissionsCorePopulatedTable.txt", sep="\t")
+diagnoses_df  = pd.read_csv("AdmissionsDiagnosesCorePopulatedTable.txt", sep="\t")
+labs_df       = pd.read_csv("LabsCorePopulatedTable.txt", sep="\t")
+patient_df    = pd.read_csv("PatientCorePopulatedTable.txt", sep="\t")
+
+# --- Basic preview ---
+print("Admissions:")
+display(admissions_df.head())
+print("Diagnoses:")
+display(diagnoses_df.head())
+
+# 4. Calculate age from date of birth
+def calculate_age(birth_date):
+    today = date.today()
+    age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+    return age
+
+patient_df["PatientDateOfBirth"] = pd.to_datetime(patient_df["PatientDateOfBirth"], errors='coerce')
+patient_df["Age"] = patient_df["PatientDateOfBirth"].apply(calculate_age)
+
+# 5. Convert admission times to datetime and calculate duration
+admissions_df["AdmissionStartDate"] = pd.to_datetime(admissions_df["AdmissionStartDate"], errors='coerce')
+admissions_df["AdmissionEndDate"] = pd.to_datetime(admissions_df["AdmissionEndDate"], errors='coerce')
+admissions_df["num_hours"] = (admissions_df["AdmissionEndDate"] - admissions_df["AdmissionStartDate"]).dt.total_seconds() / 3600
+
+# 6. Visualizations
+fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 8))
+patient_grouped_df = patient_df.groupby('PatientGender')['PatientID'].nunique().reset_index()
+ax1.bar(patient_grouped_df["PatientGender"], patient_grouped_df["PatientID"])
+ax1.set_title("Gender distribution")
+
+patient_grouped_df = patient_df.groupby('PatientRace')['PatientID'].nunique().reset_index()
+ax2.bar(patient_grouped_df["PatientRace"], patient_grouped_df["PatientID"])
+ax2.set_title("Race distribution")
+
+patient_grouped_df = patient_df.groupby('PatientMaritalStatus')['PatientID'].nunique().reset_index()
+ax3.bar(patient_grouped_df["PatientMaritalStatus"], patient_grouped_df["PatientID"])
+ax3.set_title("Marital status")
+
+patient_grouped_df = patient_df.groupby('PatientLanguage')['PatientID'].nunique().reset_index()
+ax4.bar(patient_grouped_df["PatientLanguage"], patient_grouped_df["PatientID"])
+ax4.set_title("Language distribution")
+plt.tight_layout()
+plt.show()
+
+# 7. Age ranges
+bins = [0,30,40,50,60,70,80,90,100,120]
+labels = ['<30','30-39','40-49','50-59','60-69','70-79','80-89','90-99','100>']
+patient_df['AgeRange'] = pd.cut(patient_df['Age'], bins=bins, labels=labels, include_lowest=True)
+
+plt.figure(figsize=(10,4))
+age_counts = patient_df.groupby('AgeRange')['PatientID'].nunique().reset_index()
+plt.bar(age_counts['AgeRange'], age_counts['PatientID'])
+plt.title("Age Range Distribution")
+plt.show()
+
+# 8. Diagnosis analysis
+diagnoses_df["OverallDiagnosisCode"] = diagnoses_df["PrimaryDiagnosisCode"].str[0]
+diagnoses_df["DiagnosisCode1"] = diagnoses_df["PrimaryDiagnosisCode"].str.split(".").str[0]
+diagnoses_df["DiagnosisCode2"] = diagnoses_df["PrimaryDiagnosisCode"].str.split(".").str[1].fillna("")
+
+# Plot top codes
+plt.figure(figsize=(10,4))
+top_codes = diagnoses_df["OverallDiagnosisCode"].value_counts().head(10)
+plt.bar(top_codes.index, top_codes.values)
+plt.title("Top 10 Diagnosis Code Categories")
+plt.show()
+
+# 9. Combine datasets
+admit_diag_df = pd.merge(admissions_df, diagnoses_df, on=['PatientID','AdmissionID'], how='left')
+admit_patient_diag_df = pd.merge(admit_diag_df, patient_df, on='PatientID', how='left')
+admit_patient_diag_df.drop(columns=["PatientDateOfBirth"], inplace=True)
+
+# 10. Convert categorical features
+for col in ['OverallDiagnosisCode','DiagnosisCode1','DiagnosisCode2','PatientGender',
+            'PatientRace','PatientMaritalStatus','PatientLanguage','AgeRange']:
+    admit_patient_diag_df[col] = admit_patient_diag_df[col].astype('category')
+    admit_patient_diag_df[col + '_cat'] = admit_patient_diag_df[col].cat.codes
+
+# 11. SOM modeling
+input_df = admit_patient_diag_df[['AdmissionID','num_hours','OverallDiagnosisCode_cat','DiagnosisCode1_cat',
+                                  'DiagnosisCode2_cat','PatientGender_cat','PatientRace_cat',
+                                  'PatientMaritalStatus_cat','PatientLanguage_cat','AgeRange_cat']].fillna(0)
+
+input_data = input_df.values
+som = MiniSom(6, 6, input_len=input_df.shape[1], sigma=0.5, learning_rate=0.5, random_seed=42)
+som.train_random(input_data, 100)
+
+# 12. SOM visualization
+from matplotlib.patches import Patch
+plt.figure(figsize=(8,8))
+plt.title("SOM Distance Map (U-Matrix)")
+plt.pcolor(som.distance_map().T)
+plt.colorbar(label='Distance')
+plt.show()
+
+# Optional: cluster membership
+winner_coordinates = np.array([som.winner(x) for x in input_data])
+cluster_indices = np.ravel_multi_index(winner_coordinates.T, (6,6))
+admit_patient_diag_df['Cluster'] = cluster_indices
+
+print("\n✅ Processing complete! Data ready with SOM clusters.")
+display(admit_patient_diag_df.head())
